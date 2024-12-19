@@ -73,7 +73,7 @@ namespace tdsCshapu
         List<FrnFileOrigin> vlist = new List<FrnFileOrigin>(500);
 
         //listview 绑定
-        List<FrnFileOrigin> Records = new List<FrnFileOrigin>() { };
+        List<RecordFrn> Records = new List<RecordFrn>() { };
 
         private ListViewItem[] CurrentCacheItemsSource;
 
@@ -347,8 +347,8 @@ namespace tdsCshapu
                 vlist = new List<FrnFileOrigin>(new FrnFileOrigin[totalcount]);
 
             }
-            readsets();  //记录相关* //
-
+            ReadRecords();  //记录相关* //
+            UpdateRecord();
 
 
             StringBuilder drinfo = new StringBuilder();
@@ -402,7 +402,7 @@ namespace tdsCshapu
             {
                 foreach (var rec in Records)
                 {
-                    rec.UpdateIconIndex();
+                    rec.file?.UpdateIconIndex();
                 }
             }
         }
@@ -1285,17 +1285,7 @@ Restart:;
             {
 
             }
-
-            //记录相关* //
-            try
-            {
-
-                buffercoolies();
-
-            }
-            catch
-            {
-            }
+                        
 
             UnregisterHotKey(Handle, 8617);
             //notifyIcon1.Dispose();
@@ -1416,10 +1406,10 @@ Restart:;
         //记录相关
         private void ShowRecord()
         {
-
-
             if (Records.Count > 0)
             {
+                UpdateRecord();
+
                 while (Records.Count > 100)
                 {
                     Records.RemoveAt(Records.Count - 1);
@@ -1431,7 +1421,7 @@ Restart:;
                 //this.BeginInvoke(new dosize(Sizecalc), Record.Count);
                 for (int i = 0; i < Records.Count; i++)
                 {
-                    vlist[i] = Records[i];
+                    vlist[i] = Records[i].file;
                 }
                 this.BeginInvoke(new System.EventHandler(Recordupdate), vresultNum);  //异步invoke
 
@@ -1448,29 +1438,10 @@ Restart:;
         }
 
         //记录相关*
-        private void UpdateRecord(FrnFileOrigin targ)
+        private void UpdateRecord(FrnFileOrigin? targ = null)
         {
-            bool existed = false;
-            if (Records.Count > 0)
-            {
-                for (int i = 0; i < Records.Count; i++)
-                {
-                    if ((Records[i].fileReferenceNumber == targ.fileReferenceNumber) || (Records[i].parentFrn == targ.parentFrn && Records[i].fileName == targ.fileName))
-                    {
-                        Records[i].fileReferenceNumber = targ.fileReferenceNumber;
-                        Records[i].fileName = targ.fileName;
-
-                        existed = true;
-
-                    }
-
-                }
-            }
-            if (existed == false)
-            {
-                Records.Add((FrnFileOrigin)targ);
-            }
-
+            RecordFrn.Update(ref Records, targ);
+            buffercoolies();
 
         }
 
@@ -1499,27 +1470,27 @@ Restart:;
             //Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
             using (StreamWriter fs = new StreamWriter(path, false, System.Text.Encoding.GetEncoding("gb2312")))
             {
-                foreach (FrnFileOrigin f in Records)
+                foreach (var f in Records)
                 {
-                    string fp = PathHelper.GetPath(f).ToString();
+                    string fp = PathHelper.GetPath(f.file).ToString();
                     if (File.Exists(fp) || Directory.Exists(fp))
-                    {
-                        fs.WriteLine(string.Concat(f.fileReferenceNumber, "@", f.parentFrn.fileReferenceNumber, "@", f.fileName, "@", 0, "@", f.VolumeName));
+                    {                        
+                        fs.WriteLine(f.ToString());
                     }
                 }
                 fs.Close();
             }
         }
 
+
         //记录相关* //
-        private void readsets()
+        private void ReadRecords()
         {
             string path = Application.StartupPath + "\\" + "Record.cah";
             if (File.Exists(path))
             {
                 //try
                 {
-
                     // Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
                     using (StreamReader fs = new StreamReader(path, System.Text.Encoding.GetEncoding("gb2312")))
                     {
@@ -1530,13 +1501,19 @@ Restart:;
                             {
                                 string[] KeyValue = fs.ReadLine().Split('@');
 
-                                if (KeyValue != null && KeyValue.GetUpperBound(0) == 4)
+                                if (KeyValue != null && KeyValue.Length == 3)
                                 {
-
-                                    if ((fileSysList[int.Parse(KeyValue[3])].files.TryGetValue(UInt64.Parse(KeyValue[0]), out FrnFileOrigin f)))
+                                    foreach(var filesys in fileSysList)
                                     {
-                                        Records.Add(f as FrnFileOrigin);
+                                        if (filesys.driveInfo.Name.TrimEnd('\\').TrimEnd(':') == KeyValue[1])
+                                        {
+                                            if (filesys.files.TryGetValue(UInt64.Parse(KeyValue[0]), out FrnFileOrigin f))
+                                            {
+                                                Records.Add(new RecordFrn(f, int.Parse(KeyValue[2])));
+                                            }
+                                        }
                                     }
+
                                 }
                             }
                             catch
@@ -2978,6 +2955,61 @@ Restart:;
                 ifhide = false;
                 MessageBox.Show("目标不存在或缺少权限。");
             }
+        }
+    }
+
+    class RecordFrn
+    {
+        const int initFreq = 50;
+        const int increFreq = 15;
+        public FrnFileOrigin file;
+        public int freq = initFreq;
+        public RecordFrn(FrnFileOrigin f)
+        {
+            this.file = f;
+        }
+        
+        public RecordFrn(FrnFileOrigin f, int freq)
+        {
+            this.file = f;
+            this.freq = freq;
+        }
+
+
+        public override string ToString()
+        {
+            if (file != null)
+            {
+                return $"{file.fileReferenceNumber}@{file.VolumeName}@{freq}";
+            }
+            else
+            {
+                return string.Empty;
+            }
+        }
+
+        public static void Update(ref List<RecordFrn> records, FrnFileOrigin? newRecord = null)
+        {
+            if (newRecord != null)
+            {
+                var oldrec = records.FirstOrDefault(o => o.file == newRecord);
+                if (oldrec != null)
+                {
+                    oldrec.freq += increFreq;
+                }
+                else
+                {
+                    records.Add(new RecordFrn(newRecord));
+                }
+
+                records = records.OrderByDescending(o => o.freq).ToList();
+
+                for (int i = 0; i < records.Count; i++)
+                {
+                    records[i].freq -= i;
+                }
+            }
+            records = records.OrderByDescending(o => o.freq).ToList();
         }
     }
 }
